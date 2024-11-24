@@ -55,14 +55,23 @@ function parseCSV(csvData) {
     alert("Invalid or empty CSV data. Select a valid file.");
     return null;
   }
-  const headers = lines[0].split(',').map(h => h.replace(/"/g, ''));
+
+  const headers = lines[0].split(';').map(h => h.replace(/"/g, ''));
   const data = [];
+
   for (let i = 1; i < lines.length; i++) {
-    const currentLine = lines[i].split(',');
+    const currentLine = lines[i].split(';');
     if (currentLine.length > 1) {
       const row = {};
       for (let j = 0; j < headers.length; j++) {
-        row[headers[j]] = currentLine[j].replace(/"/g, '');
+        let value = currentLine[j].replace(/"/g, '');
+
+        // Extract date from _submission_time:
+        if (headers[j] === '_submission_time') {
+          value = value.slice(0, 10); 
+        }
+
+        row[headers[j]] = value;
       }
       data.push(row);
     }
