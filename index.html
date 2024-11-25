@@ -3,6 +3,7 @@
 <head>
 <title>CfW Attendance Analyzer</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
 table {
   border-collapse: collapse;
@@ -17,9 +18,63 @@ th, td {
   text-align: right;
   margin-bottom: 10px;
 }
+.qr-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 120px;
+}
+.qr-large {
+  width: 200px;
+  height: 200px;
+}
+.copy-button, .qr-button {
+  background-color: #4CAF50;
+  border: none;
+  color: white;
+  padding: 10px 20px;
+  text-align: center;
+  text-decoration: none;
+  display: inline-block;
+  font-size: 16px;
+  margin: 4px 2px;
+  cursor: pointer;
+  border-radius: 5px;
+  transition: background-color 0.3s;
+}
+.copy-button:hover, .qr-button:hover {
+  background-color: #45a049;
+}
+.copy-button:disabled, .qr-button:disabled {
+  background-color: #cccccc;
+  cursor: not-allowed;
+}
+.remarks {
+  font-weight: bold;
+  color: green;
+  text-align: center;
+}
+.qr-cell {
+    text-align: center; /* Horizontally center content */
+    vertical-align: middle; /* Vertically center content */
+    display: flex;  /* Enable flexbox layout */
+    justify-content: center; /* Horizontally center within flexbox */
+    align-items: center; /* Vertically center within flexbox */
+    min-height: 34px; /* Set a minimum height for vertical centering */
+}
+.greyed-out {
+  background-color: #f0f0f0;
+  color: #888;
+}
+
 @media (max-width: 600px) {
   table { font-size: 14px; }
   th, td { padding: 4px; }
+  .qr-large { width: 120px; height: 120px; }
+  .copy-button, .qr-button {
+    padding: 8px 16px;
+    font-size: 14px;
+  }
 }
 </style>
 </head>
@@ -34,6 +89,8 @@ th, td {
 <div id="tableContainer"></div>
 
 <script>
+let globalData = null;
+
 function handleFile() {
   const file = document.getElementById('fileInput').files[0];
   if (!file) { alert("Select a CSV file."); return; }
@@ -41,11 +98,20 @@ function handleFile() {
   reader.onload = (e) => {
     const parsedData = parseCSV(e.target.result);
     if (parsedData) {
+      globalData = parsedData;
       const latestData = getLatestDateEntries(parsedData);
       displayTable(latestData);
+      // Delay QR code generation to avoid blocking UI
+      setTimeout(prepareQRCodes, 100);
     }
   };
   reader.readAsText(file);
+}
+
+function prepareQRCodes() {
+  if (!globalData) return;
+  const latestData = getLatestDateEntries(globalData);
+  generateQRCodes(latestData);
 }
 
 function parseCSV(csvData) {
@@ -91,15 +157,14 @@ function getLatestDateEntries(data) {
 
   let latestDateData = data.filter(row => row['_submission_time'] === latestDate);
 
-  const seenHouseholdIDs = new Set(); // Use a Set to track seen Household IDs
+  const seenHouseholdIDs = new Set();
   latestDateData = latestDateData.filter(row => {
-    const householdID = row['Household ID'];  //  Use 'Household ID' here!
+    const householdID = row['Household ID'];
     return !seenHouseholdIDs.has(householdID) && seenHouseholdIDs.add(householdID);
   });
 
   return latestDateData;
 }
-
 
 function sortDataByScheme(data) {
   return [...data].sort((a, b) => a.Scheme.localeCompare(b.Scheme));
@@ -109,7 +174,7 @@ function displayTable(data) {
   const sortedData = sortDataByScheme(data);
   const tableContainer = document.getElementById('tableContainer');
   let tableHTML = '<table>';
-  tableHTML += '<tr><th>SL</th><th>Household ID</th><th>Scheme</th><th>Date</th><th>Copy</th><th>Remarks</th></tr>';
+  tableHTML += '<tr><th>SL</th><th>Household ID</th><th>Scheme</th><th>Date</th><th>Copy</th><th>QR Code</th><th>Remarks</th></tr>';
   for (let i = 0; i < sortedData.length; i++) {
     tableHTML += createTableRow(sortedData[i], i);
   }
@@ -124,26 +189,99 @@ function createTableRow(row, index) {
   rowHTML += `<td>${row['Household ID'] || ''}</td>`;
   rowHTML += `<td>${row['Scheme'] || ''}</td>`;
   rowHTML += `<td>${row['_submission_time'] || ''}</td>`;
-  rowHTML += `<td><button onclick="copyHouseholdID(${index})">Copy</button></td>`;
+  rowHTML += `<td><button class="copy-button" onclick="copyHouseholdID(${index})">Copy ID</button></td>`;
+  rowHTML += `<td class="qr-cell"><button class="qr-button" onclick="showQRCode(${index})">Show QR</button><div id="qrcode_${index}" class="qr-container"></div></td>`;
   rowHTML += `<td id="remarks_${index}"></td>`;
   rowHTML += '</tr>';
   return rowHTML;
 }
 
 function copyHouseholdID(rowIndex) {
-  const table = document.getElementById('tableContainer').querySelector('table');
-  if (!table || rowIndex < 0 || rowIndex >= table.rows.length - 1) {
-    console.error("Invalid row index or table not found.");
-    return;
+    const table = document.getElementById('tableContainer').querySelector('table');
+    if (!table || rowIndex < 0 || rowIndex >= table.rows.length - 1) {
+        console.error("Invalid row index or table not found.");
+        return;
+    }
+
+    const row = table.rows[rowIndex + 1];
+    const householdID = row.cells[1].textContent;
+    const remarksCell = row.cells[6];
+    const copyButton = row.cells[4].querySelector('.copy-button');
+    const qrButton = row.cells[5].querySelector('.qr-button');
+
+    // Create temporary textarea for copying
+    const el = document.createElement('textarea');
+    el.value = householdID;
+    document.body.appendChild(el);
+    el.select();
+    document.execCommand('copy');
+    document.body.removeChild(el);
+
+    // Update remarks cell with styled text
+    remarksCell.innerHTML = '<span class="remarks">Copied</span>';
+
+    // Permanently disable buttons and grey out the row
+    copyButton.disabled = true;
+    qrButton.disabled = true;
+    row.classList.add('greyed-out');
+}
+
+function showQRCode(index) {
+    const table = document.getElementById('tableContainer').querySelector('table');
+    const row = table.rows[index + 1];
+    const qrcodeDiv = row.cells[5].querySelector('.qr-container');
+    let showQRButton = row.cells[5].querySelector('.qr-button'); // Get the button element
+    const remarksCell = row.cells[6];
+    const copyButton = row.cells[4].querySelector('.copy-button');
+
+    // Hide all other QR codes and their buttons except for the current one
+    hideOtherQRCodes(index);
+
+    // Generate QR code
+    const householdID = row.cells[1].textContent;
+
+    new QRCode(qrcodeDiv, {
+        text: householdID,
+        width: 200,
+        height: 200,
+        colorDark: '#000000',
+        colorLight: '#ffffff',
+        correctLevel: QRCode.CorrectLevel.H
+    });
+
+    // Update remarks cell, disable buttons, make it permanent, and hide the Show QR button
+    remarksCell.innerHTML = '<span class="remarks">Done</span>';
+    showQRButton.style.display = 'none'; // Hide the Show QR button
+    copyButton.disabled = true;
+    row.classList.add('greyed-out');
+}
+function hideOtherQRCodes(currentIndex) {
+    const table = document.getElementById('tableContainer').querySelector('table');
+    if (!table) return;
+
+    for (let i = 1; i < table.rows.length; i++) {
+        if (i !== currentIndex + 1) {
+            const row = table.rows[i];
+            const qrcodeDiv = row.cells[5].querySelector('.qr-container');
+            let showQRButton = row.cells[5].querySelector('.qr-button');
+
+            qrcodeDiv.innerHTML = '';
+            if (showQRButton.style.display === 'none') {
+                showQRButton.style.display = ''; // Re-show the button
+            }
+        }
+    }
+}
+
+function generateQRCodes(data) {
+  for (let i = 0; i < data.length; i++) {
+    const qrcodeDiv = document.getElementById(`qrcode_${i}`);
+    if (!qrcodeDiv) continue;
+    
+    const householdID = data[i]['Household ID'];
+    // Preload QR code data without rendering
+    qrcodeDiv.setAttribute('data-household-id', householdID);
   }
-  const householdID = table.rows[rowIndex + 1].cells[1].textContent;
-  const el = document.createElement('textarea');
-  el.value = householdID;
-  document.body.appendChild(el);
-  el.select();
-  document.execCommand('copy');
-  document.body.removeChild(el);
-  document.getElementById(`remarks_${rowIndex}`).textContent = "Done";
 }
 
 function displaySummary(data) {
@@ -176,7 +314,7 @@ function displaySummary(data) {
     for (const gender in schemeBreakdown[scheme].genderCounts) {
       summaryHTML += `${gender}: ${schemeBreakdown[scheme].genderCounts[gender]}, `;
     }
-    summaryHTML = summaryHTML.slice(0, -2); // Remove trailing comma and space
+    summaryHTML = summaryHTML.slice(0, -2);
     summaryHTML += "</p>";
 
     summaryHTML += "<p>Skill Counts: ";
@@ -191,11 +329,5 @@ function displaySummary(data) {
 }
 
 </script>
-</body>
-</html>
-
-
-</script>
-
 </body>
 </html>
